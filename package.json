@@ -1,0 +1,24 @@
+{
+  "name": "tomtomtraffic",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/katemessitte/TomTomTraffic.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/katemessitte/TomTomTraffic/issues"
+  },
+  "homepage": "https://github.com/katemessitte/TomTomTraffic#readme",
+  "dependencies": {
+    "sense-hat-joystick-x64": "^0.2.0",
+    "sense-hat-led": "^1.2.0"
+  }
+}
