@@ -1,6 +1,6 @@
 const https = require("https");
 const sense = require("sense-hat-led").sync;
-const Joystick = require("./sense-hat-joystick/Joystick.js");
+const Joystick = require("sense-hat-joystick-x64");
 
 const joystick = new Joystick();
 
@@ -248,14 +248,9 @@ async function init() {
 
 function shutdown() {
   console.log("Shutting down...");
-
-  // turn off all LEDs
+  joystick.end();
   sense.clear();
-
-  // if you have any intervals running, stop them
-  // clearInterval(loop);
-
-  process.exit(0);
+  process.kill(process.pid, "SIGKILL");
 }
 
 process.on("SIGINT", shutdown);   // Ctrl + C
