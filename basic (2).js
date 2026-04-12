@@ -4,6 +4,7 @@ const Joystick = require("./sense-hat-joystick/Joystick.js");
 
 const joystick = new Joystick();
 
+
 // --------------------
 // CONFIG
 // --------------------
