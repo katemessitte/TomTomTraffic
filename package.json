@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
+    "collect60": "pm2 delete tomtom || true && pm2 start ecosystem.config.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
