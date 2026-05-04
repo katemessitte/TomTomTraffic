@@ -686,10 +686,24 @@ const sparseRoute = 10; // every ~300m, roughly 60 points
 const sections = routeLatLon.filter((d, i) => i % sparseRoute === 0);
 
 // Read API keys from .apikeys file — one key per line, file is gitignored
-const apiKeysToTry = fs.readFileSync(path.join(__dirname, '.apikeys'), 'utf8')
-  .split('\n')
-  .map(k => k.trim())
-  .filter(k => k.length > 0);
+const apiKeysPath = path.join(__dirname, '.apikeys');
+let apiKeysToTry = [];
+try {
+  apiKeysToTry = fs.readFileSync(apiKeysPath, 'utf8')
+    .split('\n')
+    .map(k => k.trim())
+    .filter(k => k.length > 0);
+} catch (err) {
+  console.error(`ERROR: Could not read API keys file at ${apiKeysPath}`);
+  console.error(`  Create the file with one TomTom API key per line.`);
+  console.error(`  See .apikeys.example for the expected format.`);
+  process.exit(1);
+}
+if (apiKeysToTry.length === 0) {
+  console.error(`ERROR: ${apiKeysPath} exists but contains no keys.`);
+  console.error(`  Add at least one TomTom API key (one per line).`);
+  process.exit(1);
+}
 
 // Polling interval: set INTERVAL_MINUTES env variable or defaults to 60
 const INTERVAL_MS = parseInt(process.env.INTERVAL_MINUTES || '60') * 60 * 1000;
