@@ -5,7 +5,7 @@ const Joystick = require("sense-hat-joystick-x64");
 
 const joystick = new Joystick();
 
-const apiKey = "0oJFlaXSdxaXPTsIU6D6GrP1KEu4Iwse";
+const apiKey = "zP5Apf6BLYXLsCErrgfsRNbST8PmxlwM";
 const HISTORY_FILE = "history.csv";
 
 const WAYPOINTS = [
@@ -52,9 +52,9 @@ function mean(arr, fn) {
 }
 
 function congestionColor(percent) {
-  if (percent < 80) return [139, 0, 0];
-  if (percent < 90) return [255, 69, 0];
-  if (percent < 100) return [255, 223, 40];
+  if (percent < 40) return [139, 0, 0];
+  if (percent < 60) return [255, 69, 0];
+  if (percent < 80) return [255, 223, 40];
   return [50, 205, 50];
 }
 
@@ -203,10 +203,10 @@ function displayWindow() {
 
     for (let col = 0; col < 8; col++) {
       if (col < 5) {
-        pixels.push(col < filledCols ? color : [0, 0, 0]);
+        pixels.push(color);
       } else {
         if (segmentBlock === selectedSegment) {
-          pixels.push(blinkState ? [0, 0, 255] : [0, 0, 0]);
+          pixels.push([0, 0, 255]);
         } else {
           pixels.push([0, 0, 80]);
         }
