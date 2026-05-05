@@ -1,46 +1,40 @@
 const https = require("https");
+const fs = require("fs");
 const sense = require("sense-hat-led").sync;
 const Joystick = require("sense-hat-joystick-x64");
 
 const joystick = new Joystick();
 
-
-// --------------------
-// CONFIG
-// --------------------
 const apiKey = "0oJFlaXSdxaXPTsIU6D6GrP1KEu4Iwse";
+const HISTORY_FILE = "history.csv";
 
-// I-76 endpoints
 const WAYPOINTS = [
-  { lat: 39.9210, lon: -75.1592 }, // Walt Whitman
-  { lat: 39.9450, lon: -75.1800 }, // South Philly
-  { lat: 39.9600, lon: -75.2100 }, // University City
-  { lat: 39.9800, lon: -75.2500 }, // Bala Cynwyd
-  { lat: 40.0300, lon: -75.3100 }, // Main Line
-  { lat: 40.0918, lon: -75.3963 }  // KOP
+  { lat: 39.9210, lon: -75.1592 },
+  { lat: 39.9450, lon: -75.1800 },
+  { lat: 39.9600, lon: -75.2100 },
+  { lat: 39.9800, lon: -75.2500 },
+  { lat: 40.0300, lon: -75.3100 },
+  { lat: 40.0918, lon: -75.3963 }
 ];
 
 const TOTAL_POINTS = 320;
 const TOTAL_BINS = 32;
-
 const SEGMENTS = 4;
-const BINS_PER_SEGMENT = TOTAL_BINS / SEGMENTS; // 8
+const BINS_PER_SEGMENT = 8;
 
 let selectedSegment = 0;
 let blinkState = true;
 
-let allBins = [];
+let mode = "live"; // "live" or "history"
+let liveBins = [];
+let historicalSnapshots = [];
+let selectedHistoryIndex = 0;
 
-// --------------------
-// HELPERS
-// --------------------
 function getJson(url) {
   return new Promise((resolve, reject) => {
     https.get(url, res => {
       let data = "";
-
       res.on("data", chunk => data += chunk);
-
       res.on("end", () => {
         try {
           resolve(JSON.parse(data));
@@ -74,7 +68,6 @@ function buildPoints() {
 
     for (let j = 0; j < pointsPerSegment; j++) {
       const t = j / pointsPerSegment;
-
       points.push({
         lat: a.lat + t * (b.lat - a.lat),
         lon: a.lon + t * (b.lon - a.lon)
@@ -91,9 +84,6 @@ async function getTraffic(lat, lon) {
     `?point=${lat},${lon}&key=${apiKey}`;
 
   const data = await getJson(url);
-
-  console.log("RAW API:", JSON.stringify(data).slice(0, 300));
-
   if (!data.flowSegmentData) return null;
 
   const s = data.flowSegmentData;
@@ -124,7 +114,6 @@ async function fetchTrafficBatched(points, batchSize = 50) {
     );
 
     results.push(...batchResults);
-
     await new Promise(r => setTimeout(r, 200));
   }
 
@@ -142,7 +131,6 @@ function buildBins(trafficData) {
     }));
 
   const sorted = highways.sort((a, b) => a.latitude - b.latitude);
-
   const bins = [];
   const binSize = Math.ceil(sorted.length / TOTAL_BINS);
 
@@ -158,55 +146,68 @@ function buildBins(trafficData) {
     });
   }
 
-  bins.forEach((b, i) => {
-    console.log("Bin", i + 1, "=", b.congestionPercent);
-  });
-
   return bins;
 }
 
+function loadHistoryCsv() {
+  if (!fs.existsSync(HISTORY_FILE)) {
+    console.log("No history.csv found.");
+    return [];
+  }
+
+  const text = fs.readFileSync(HISTORY_FILE, "utf8").trim();
+  const lines = text.split("\n").slice(1);
+
+  const grouped = {};
+
+  for (const line of lines) {
+    const [timestamp, binRaw, percentRaw] = line.split(",");
+    const bin = Number(binRaw);
+    const congestionPercent = Number(percentRaw);
+
+    if (!grouped[timestamp]) {
+      grouped[timestamp] = Array.from({ length: TOTAL_BINS }, () => ({
+        congestionPercent: 0
+      }));
+    }
+
+    grouped[timestamp][bin] = { congestionPercent };
+  }
+
+  return Object.entries(grouped).map(([timestamp, bins]) => ({
+    timestamp,
+    bins
+  }));
+}
+
+function getCurrentBins() {
+  if (mode === "live") return liveBins;
+
+  if (!historicalSnapshots.length) return liveBins;
+
+  return historicalSnapshots[selectedHistoryIndex].bins;
+}
+
 function displayWindow() {
+  const allBins = getCurrentBins();
   const start = selectedSegment * BINS_PER_SEGMENT;
-  const visible = allBins.slice(start, start + 8);
+  const visible = allBins.slice(start, start + BINS_PER_SEGMENT);
 
   const pixels = [];
 
   for (let row = 0; row < 8; row++) {
     const percent = visible[row]?.congestionPercent ?? 0;
     const color = congestionColor(percent);
-
-    // how many columns to fill (0–5)
     const filledCols = Math.round((percent / 100) * 5);
-
-    // which segment block this row belongs to (for right side map)
     const segmentBlock = Math.floor(row / 2);
 
     for (let col = 0; col < 8; col++) {
-
-      // --------------------
-      // LEFT SIDE (0–4): BAR GRAPH
-      // --------------------
       if (col < 5) {
-        if (col < filledCols) {
-          pixels.push(color);
-        } else {
-          pixels.push([0, 0, 0]);
-        }
-      }
-
-      // --------------------
-      // RIGHT SIDE (5–7): SEGMENT MAP
-      // --------------------
-      else {
+        pixels.push(col < filledCols ? color : [0, 0, 0]);
+      } else {
         if (segmentBlock === selectedSegment) {
-          // blinking selected segment
-          if (blinkState) {
-            pixels.push([0, 0, 255]); // bright blue
-          } else {
-            pixels.push([0, 0, 0]);   // off
-          }
+          pixels.push(blinkState ? [0, 0, 255] : [0, 0, 0]);
         } else {
-          // other segments = dim blue
           pixels.push([0, 0, 80]);
         }
       }
@@ -215,7 +216,78 @@ function displayWindow() {
 
   sense.setPixels(pixels);
 
-  console.log(`Displaying segment ${selectedSegment + 1}`);
+  if (mode === "live") {
+    console.log(`LIVE | Segment ${selectedSegment + 1}`);
+  } else {
+    const snap = historicalSnapshots[selectedHistoryIndex];
+    console.log(`HIST ${selectedHistoryIndex + 1}/${historicalSnapshots.length} | ${snap.timestamp} | Segment ${selectedSegment + 1}`);
+  }
+}
+
+function nextSegment() {
+  selectedSegment = (selectedSegment + 1) % SEGMENTS;
+  displayWindow();
+}
+
+function prevSegment() {
+  selectedSegment = (selectedSegment - 1 + SEGMENTS) % SEGMENTS;
+  displayWindow();
+}
+
+function nextHistory() {
+  if (mode !== "history") {
+    mode = "history";
+    sense.showMessage("HIST", 0.05);
+  }
+
+  if (!historicalSnapshots.length) {
+    sense.showMessage("NO HIST", 0.05);
+    return;
+  }
+
+  selectedHistoryIndex =
+    (selectedHistoryIndex + 1) % historicalSnapshots.length;
+
+  sense.showMessage(`T ${selectedHistoryIndex + 1}`, 0.05);
+  displayWindow();
+}
+
+function prevHistory() {
+  if (mode !== "history") {
+    mode = "history";
+    sense.showMessage("HIST", 0.05);
+  }
+
+  if (!historicalSnapshots.length) {
+    sense.showMessage("NO HIST", 0.05);
+    return;
+  }
+
+  selectedHistoryIndex =
+    (selectedHistoryIndex - 1 + historicalSnapshots.length) %
+    historicalSnapshots.length;
+
+  sense.showMessage(`T ${selectedHistoryIndex + 1}`, 0.05);
+  displayWindow();
+}
+
+function toggleMode() {
+  if (mode === "live") {
+    mode = "history";
+
+    if (!historicalSnapshots.length) {
+      sense.showMessage("NO HIST", 0.05);
+      mode = "live";
+      return;
+    }
+
+    sense.showMessage("HIST", 0.05);
+  } else {
+    mode = "live";
+    sense.showMessage("LIVE", 0.05);
+  }
+
+  displayWindow();
 }
 
 setInterval(() => {
@@ -223,58 +295,39 @@ setInterval(() => {
   displayWindow();
 }, 500);
 
-function nextSegment() {
-  if (selectedSegment >= SEGMENTS - 1) {
-    sense.showMessage("END", 0.05);
-    return;
-  }
+joystick.on("down", () => {
+  nextSegment();
+});
 
-  selectedSegment++;
-  displayWindow();
-}
+joystick.on("up", () => {
+  prevSegment();
+});
 
-function prevSegment() {
-  if (selectedSegment <= 0) {
-    sense.showMessage("START", 0.05);
-    return;
-  }
-
-  selectedSegment--;
-  displayWindow();
-}
-
-
-// --------------------
-// JOYSTICK
-// --------------------
 joystick.on("right", () => {
-  selectedSegment = (selectedSegment + 1) % SEGMENTS;
-  displayWindow();
+  nextHistory();
 });
 
 joystick.on("left", () => {
-  selectedSegment =
-    (selectedSegment - 1 + SEGMENTS) % SEGMENTS;
-  displayWindow();
+  prevHistory();
 });
 
 joystick.on("enter", () => {
-  displayWindow();
+  toggleMode();
 });
 
-
-// --------------------
-// INIT
-// --------------------
 async function init() {
-  sense.showMessage("LOADING I76", 0.05);
+  sense.showMessage("LOAD I76", 0.05);
+
+  historicalSnapshots = loadHistoryCsv();
+  console.log(`Loaded ${historicalSnapshots.length} historical snapshots.`);
 
   const points = buildPoints();
   const traffic = await fetchTrafficBatched(points);
 
-  allBins = buildBins(traffic);
+  liveBins = buildBins(traffic);
 
   sense.showMessage("READY", 0.05);
+  sense.showMessage("LIVE", 0.05);
 
   displayWindow();
 }
@@ -283,10 +336,10 @@ function shutdown() {
   console.log("Shutting down...");
   joystick.end();
   sense.clear();
-  process.kill(process.pid, "SIGKILL");
+  process.exit(0);
 }
 
-process.on("SIGINT", shutdown);   // Ctrl + C
-process.on("SIGTERM", shutdown);  // kill / system stop
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
 
 init();
