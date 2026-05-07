@@ -5,8 +5,8 @@ const Joystick = require("sense-hat-joystick-x64");
 
 const joystick = new Joystick();
 
-const apiKey = "zP5Apf6BLYXLsCErrgfsRNbST8PmxlwM";
-const HISTORY_FILE = "history.csv";
+const apiKey = "YZx6zQMM2oUy0dpzKvb11J19bPefrxoY";
+const HISTORY_FILE = "./data/history.csv";
 
 const WAYPOINTS = [
   { lat: 39.9210, lon: -75.1592 },
@@ -54,8 +54,8 @@ function mean(arr, fn) {
 function congestionColor(percent) {
   if (percent < 40) return [139, 0, 0];
   if (percent < 60) return [255, 69, 0];
-  if (percent < 80) return [255, 223, 40];
-  return [50, 205, 50];
+  if (percent < 99) return [255, 223, 40];
+  return [0, 100, 0];
 }
 
 function buildPoints() {
@@ -156,40 +156,99 @@ function loadHistoryCsv() {
   }
 
   const text = fs.readFileSync(HISTORY_FILE, "utf8").trim();
-  const lines = text.split("\n").slice(1);
+  if (!text) return [];
+
+  const lines = text.split(/\r?\n/);
+  const headers = lines[0].split("\t");
+
+  const hourIndex = headers.indexOf("hour");
+  const timestampIndex = headers.indexOf("timestamp");
+  const latIndex = headers.indexOf("lat");
+  const percentIndex = headers.indexOf("congestionPercent");
+
+  if (latIndex === -1 || percentIndex === -1) {
+    console.log("CSV is missing lat or congestionPercent column.");
+    return [];
+  }
+
+  const timeIndex = hourIndex !== -1 ? hourIndex : timestampIndex;
 
   const grouped = {};
 
-  for (const line of lines) {
-    const [timestamp, binRaw, percentRaw] = line.split(",");
-    const bin = Number(binRaw);
-    const congestionPercent = Number(percentRaw);
+  for (const line of lines.slice(1)) {
+    if (!line.trim()) continue;
 
-    if (!grouped[timestamp]) {
-      grouped[timestamp] = Array.from({ length: TOTAL_BINS }, () => ({
-        congestionPercent: 0
-      }));
+    const cols = line.split("\t");
+
+    const time = cols[timeIndex];
+    const lat = Number(cols[latIndex]);
+    const congestionPercent = Number(cols[percentIndex]);
+
+    if (!time || Number.isNaN(lat) || Number.isNaN(congestionPercent)) {
+      continue;
     }
 
-    grouped[timestamp][bin] = { congestionPercent };
+    if (!grouped[time]) grouped[time] = [];
+
+    grouped[time].push({
+      latitude: lat,
+      congestionPercent
+    });
   }
 
-  return Object.entries(grouped).map(([timestamp, bins]) => ({
-    timestamp,
-    bins
-  }));
+  const snapshots = [];
+
+  for (const [timestamp, rows] of Object.entries(grouped)) {
+    rows.sort((a, b) => a.latitude - b.latitude);
+
+    const binSize = Math.ceil(rows.length / TOTAL_BINS);
+    const bins = [];
+
+    for (let i = 0; i < TOTAL_BINS; i++) {
+      const start = i * binSize;
+      const end = Math.min(start + binSize, rows.length);
+      const section = rows.slice(start, end);
+
+      bins.push({
+        congestionPercent: section.length
+          ? mean(section, d => d.congestionPercent)
+          : 0
+      });
+    }
+
+    snapshots.push({
+      timestamp,
+      bins
+    });
+  }
+
+  snapshots.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+  return snapshots;
 }
+
 
 function getCurrentBins() {
   if (mode === "live") return liveBins;
 
   if (!historicalSnapshots.length) return liveBins;
 
-  return historicalSnapshots[selectedHistoryIndex].bins;
+  if (selectedHistoryIndex >= historicalSnapshots.length) {
+    selectedHistoryIndex = 0;
+  }
+
+  return historicalSnapshots[selectedHistoryIndex]?.bins || liveBins;
 }
 
 function displayWindow() {
   const allBins = getCurrentBins();
+
+  if (!allBins || !allBins.length) {
+    console.log("No bins available to display.");
+    sense.clear();
+    return;
+  }
+
   const start = selectedSegment * BINS_PER_SEGMENT;
   const visible = allBins.slice(start, start + BINS_PER_SEGMENT);
 
@@ -198,7 +257,6 @@ function displayWindow() {
   for (let row = 0; row < 8; row++) {
     const percent = visible[row]?.congestionPercent ?? 0;
     const color = congestionColor(percent);
-    const filledCols = Math.round((percent / 100) * 5);
     const segmentBlock = Math.floor(row / 2);
 
     for (let col = 0; col < 8; col++) {
@@ -206,9 +264,9 @@ function displayWindow() {
         pixels.push(color);
       } else {
         if (segmentBlock === selectedSegment) {
-          pixels.push([0, 0, 255]);
-        } else {
           pixels.push([0, 0, 80]);
+        } else {
+          pixels.push([0, 0, 0]);
         }
       }
     }
@@ -219,11 +277,27 @@ function displayWindow() {
   if (mode === "live") {
     console.log(`LIVE | Segment ${selectedSegment + 1}`);
   } else {
+    if (!historicalSnapshots.length) {
+      console.log("HIST mode selected, but no historical snapshots loaded.");
+      return;
+    }
+
+    if (selectedHistoryIndex >= historicalSnapshots.length) {
+      selectedHistoryIndex = 0;
+    }
+
     const snap = historicalSnapshots[selectedHistoryIndex];
-    console.log(`HIST ${selectedHistoryIndex + 1}/${historicalSnapshots.length} | ${snap.timestamp} | Segment ${selectedSegment + 1}`);
+
+    if (!snap) {
+      console.log("Historical snapshot is undefined.");
+      return;
+    }
+
+    console.log(
+      `HIST ${selectedHistoryIndex + 1}/${historicalSnapshots.length} | ${snap.timestamp} | Segment ${selectedSegment + 1}`
+    );
   }
 }
-
 function nextSegment() {
   selectedSegment = (selectedSegment + 1) % SEGMENTS;
   displayWindow();
