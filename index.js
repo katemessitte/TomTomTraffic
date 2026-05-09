@@ -436,10 +436,10 @@ function shutdown() {
   console.log("Shutting down...");
   joystick.end();
   sense.clear();
-  process.exit(0);
+  process.kill(process.pid, "SIGKILL");
 }
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);   // Ctrl + C
+process.on("SIGTERM", shutdown);  // kill / system stop
 
 init();
