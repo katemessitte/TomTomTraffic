@@ -5,8 +5,19 @@ const Joystick = require("sense-hat-joystick-x64");
 
 const joystick = new Joystick();
 
-const apiKey = "YZx6zQMM2oUy0dpzKvb11J19bPefrxoY";
 const HISTORY_FILE = "./data/history.csv";
+
+function loadApiKeys() {
+  const keyFile = "./.apikeys";
+  if (!fs.existsSync(keyFile)) {
+    console.log("No .apikeys file found. Live traffic disabled.");
+    return [];
+  }
+  return fs.readFileSync(keyFile, "utf8")
+    .split(/\r?\n/)
+    .map(k => k.trim())
+    .filter(k => k.length > 0);
+}
 
 const WAYPOINTS = [
   { lat: 39.9210, lon: -75.1592 },
@@ -78,26 +89,35 @@ function buildPoints() {
   return points;
 }
 
-async function getTraffic(lat, lon) {
-  const url =
-    `https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/10/json` +
-    `?point=${lat},${lon}&key=${apiKey}`;
+async function getTraffic(lat, lon, keys) {
+  for (let i = 0; i < keys.length; i++) {
+    const url =
+      `https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/10/json` +
+      `?point=${lat},${lon}&key=${keys[i]}`;
 
-  const data = await getJson(url);
-  if (!data.flowSegmentData) return null;
+    try {
+      const data = await getJson(url);
+      if (data.flowSegmentData) {
+        if (i > 0) console.log(`Key ${i + 1} succeeded after ${i} failure(s).`);
+        const s = data.flowSegmentData;
+        return {
+          latitude: lat,
+          longitude: lon,
+          currentSpeed: s.currentSpeed,
+          freeFlowSpeed: s.freeFlowSpeed,
+          frc: s.frc
+        };
+      }
+      console.log(`Key ${i + 1} returned no data, trying next...`);
+    } catch (err) {
+      console.log(`Key ${i + 1} failed (${err.message}), trying next...`);
+    }
+  }
 
-  const s = data.flowSegmentData;
-
-  return {
-    latitude: lat,
-    longitude: lon,
-    currentSpeed: s.currentSpeed,
-    freeFlowSpeed: s.freeFlowSpeed,
-    frc: s.frc
-  };
+  return null;
 }
 
-async function fetchTrafficBatched(points, batchSize = 50) {
+async function fetchTrafficBatched(points, keys, batchSize = 50) {
   const results = [];
 
   for (let i = 0; i < points.length; i += batchSize) {
@@ -106,7 +126,7 @@ async function fetchTrafficBatched(points, batchSize = 50) {
     const batchResults = await Promise.all(
       batch.map(async p => {
         try {
-          return await getTraffic(p.lat, p.lon);
+          return await getTraffic(p.lat, p.lon, keys);
         } catch {
           return null;
         }
@@ -395,10 +415,16 @@ async function init() {
   historicalSnapshots = loadHistoryCsv();
   console.log(`Loaded ${historicalSnapshots.length} historical snapshots.`);
 
-  const points = buildPoints();
-  const traffic = await fetchTrafficBatched(points);
+  const apiKeys = loadApiKeys();
 
-  liveBins = buildBins(traffic);
+  if (!apiKeys.length) {
+    console.log("No API keys available. Skipping live fetch — showing historical data only.");
+    sense.showMessage("NO KEY", 0.05);
+  } else {
+    const points = buildPoints();
+    const traffic = await fetchTrafficBatched(points, apiKeys);
+    liveBins = buildBins(traffic);
+  }
 
   sense.showMessage("READY", 0.05);
   sense.showMessage("LIVE", 0.05);
