@@ -180,7 +180,7 @@ function loadHistoryCsv() {
   if (!text) return [];
 
   const lines = text.split(/\r?\n/);
-  const headers = lines[0].split("\t");
+  const headers = lines[0].split(",");
 
   const hourIndex = headers.indexOf("hour");
   const timestampIndex = headers.indexOf("timestamp");
@@ -199,7 +199,7 @@ function loadHistoryCsv() {
   for (const line of lines.slice(1)) {
     if (!line.trim()) continue;
 
-    const cols = line.split("\t");
+    const cols = line.split(",");
 
     const time = cols[timeIndex];
     const lat = Number(cols[latIndex]);
@@ -264,12 +264,12 @@ function getCurrentBins() {
 function formatSnapshotTime(timestamp) {
   const date = new Date(timestamp);
   const parts = new Intl.DateTimeFormat("en-US", {
-day: "numeric",
+    day: "numeric",
     month: "short",
-      hour: "numeric",
-      hour12: false,
-      timeZone: DISPLAY_TIMEZONE
-    }).formatToParts(date);
+    hour: "numeric",
+    hour12: false,
+    timeZone: DISPLAY_TIMEZONE
+  }).formatToParts(date);
 
   const day = parts.find(p => p.type === "day").value;
   const month = parts.find(p => p.type === "month").value.toUpperCase();
