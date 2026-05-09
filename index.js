@@ -28,11 +28,12 @@ const WAYPOINTS = [
   { lat: 40.0918, lon: -75.3963 }
 ];
 
-const TOTAL_POINTS = 320;
+const TOTAL_POINTS = 128;
 const TOTAL_BINS = 32;
 const SCREEN_ROWS = 8;
 const WRAP_SCROLL = false;
 const DISPLAY_TIMEZONE = "America/New_York"; // GMT-4 (EDT)
+const COLOR_MISSING = [80, 80, 80]; // dim white — shown when no data is available
 
 let scrollOffset = 0; // which bin is at the top of the 8-row viewport
 let blinkState = true;
@@ -163,7 +164,7 @@ function buildBins(trafficData) {
     bins.push({
       congestionPercent: section.length
         ? mean(section, d => d.congestionPercent)
-        : 0
+        : null
     });
   }
 
@@ -233,7 +234,7 @@ function loadHistoryCsv() {
       bins.push({
         congestionPercent: section.length
           ? mean(section, d => d.congestionPercent)
-          : 0
+          : null
       });
     }
 
@@ -297,8 +298,8 @@ function displayWindow() {
 
   for (let row = 0; row < SCREEN_ROWS; row++) {
     const binIndex = (scrollOffset + row) % TOTAL_BINS;
-    const percent = allBins[binIndex]?.congestionPercent ?? 0;
-    const color = congestionColor(percent);
+    const percent = allBins[binIndex]?.congestionPercent ?? null;
+    const color = percent === null ? COLOR_MISSING : congestionColor(percent);
 
     for (let col = 0; col < 8; col++) {
       if (col < 5) {
