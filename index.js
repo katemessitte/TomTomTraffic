@@ -32,6 +32,7 @@ const TOTAL_POINTS = 320;
 const TOTAL_BINS = 32;
 const SCREEN_ROWS = 8;
 const WRAP_SCROLL = false;
+const DISPLAY_TIMEZONE = "America/New_York"; // GMT-4 (EDT)
 
 let scrollOffset = 0; // which bin is at the top of the 8-row viewport
 let blinkState = true;
@@ -260,6 +261,24 @@ function getCurrentBins() {
   return historicalSnapshots[selectedHistoryIndex]?.bins || liveBins;
 }
 
+function formatSnapshotTime(timestamp) {
+  const date = new Date(timestamp);
+  const parts = new Intl.DateTimeFormat("en-US", {
+day: "numeric",
+    month: "short",
+      hour: "numeric",
+      hour12: false,
+      timeZone: DISPLAY_TIMEZONE
+    }).formatToParts(date);
+
+  const day = parts.find(p => p.type === "day").value;
+  const month = parts.find(p => p.type === "month").value.toUpperCase();
+  const hour = Number(parts.find(p => p.type === "hour").value);
+  const ampm = hour < 12 ? "AM" : "PM";
+  const hour12 = hour % 12 === 0 ? 12 : hour % 12;
+  return ` ${day} ${month} ${hour12} ${ampm} `;
+}
+
 function displayWindow() {
   const allBins = getCurrentBins();
 
@@ -349,7 +368,7 @@ function nextHistory() {
   selectedHistoryIndex =
     (selectedHistoryIndex + 1) % historicalSnapshots.length;
 
-  sense.showMessage(`T ${selectedHistoryIndex + 1}`, 0.05);
+  sense.showMessage(formatSnapshotTime(historicalSnapshots[selectedHistoryIndex].timestamp), 0.05);
   displayWindow();
 }
 
@@ -368,7 +387,7 @@ function prevHistory() {
     (selectedHistoryIndex - 1 + historicalSnapshots.length) %
     historicalSnapshots.length;
 
-  sense.showMessage(`T ${selectedHistoryIndex + 1}`, 0.05);
+  sense.showMessage(formatSnapshotTime(historicalSnapshots[selectedHistoryIndex].timestamp), 0.05);
   displayWindow();
 }
 
