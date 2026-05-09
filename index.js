@@ -30,10 +30,10 @@ const WAYPOINTS = [
 
 const TOTAL_POINTS = 320;
 const TOTAL_BINS = 32;
-const SEGMENTS = 4;
-const BINS_PER_SEGMENT = 8;
+const SCREEN_ROWS = 8;
+const WRAP_SCROLL = false;
 
-let selectedSegment = 0;
+let scrollOffset = 0; // which bin is at the top of the 8-row viewport
 let blinkState = true;
 
 let mode = "live"; // "live" or "history"
@@ -269,25 +269,23 @@ function displayWindow() {
     return;
   }
 
-  const start = selectedSegment * BINS_PER_SEGMENT;
-  const visible = allBins.slice(start, start + BINS_PER_SEGMENT);
+  // The right column shows a scrollbar cursor: which row (out of 8)
+  // corresponds to the current scroll position in the full canvas.
+  const maxScroll = WRAP_SCROLL ? TOTAL_BINS : TOTAL_BINS - SCREEN_ROWS;
+  const cursorRow = Math.round(scrollOffset / maxScroll * (SCREEN_ROWS - 1));
 
   const pixels = [];
 
-  for (let row = 0; row < 8; row++) {
-    const percent = visible[row]?.congestionPercent ?? 0;
+  for (let row = 0; row < SCREEN_ROWS; row++) {
+    const binIndex = (scrollOffset + row) % TOTAL_BINS;
+    const percent = allBins[binIndex]?.congestionPercent ?? 0;
     const color = congestionColor(percent);
-    const segmentBlock = Math.floor(row / 2);
 
     for (let col = 0; col < 8; col++) {
       if (col < 5) {
         pixels.push(color);
       } else {
-        if (segmentBlock === selectedSegment) {
-          pixels.push([0, 0, 80]);
-        } else {
-          pixels.push([0, 0, 0]);
-        }
+        pixels.push(row === cursorRow ? [0, 0, 80] : [0, 0, 0]);
       }
     }
   }
@@ -295,7 +293,7 @@ function displayWindow() {
   sense.setPixels(pixels);
 
   if (mode === "live") {
-    console.log(`LIVE | Segment ${selectedSegment + 1}`);
+    console.log(`LIVE | bins ${scrollOffset + 1}-${scrollOffset + SCREEN_ROWS}/${TOTAL_BINS}`);
   } else {
     if (!historicalSnapshots.length) {
       console.log("HIST mode selected, but no historical snapshots loaded.");
@@ -314,17 +312,26 @@ function displayWindow() {
     }
 
     console.log(
-      `HIST ${selectedHistoryIndex + 1}/${historicalSnapshots.length} | ${snap.timestamp} | Segment ${selectedSegment + 1}`
+      `HIST ${selectedHistoryIndex + 1}/${historicalSnapshots.length} | ${snap.timestamp} | bins ${scrollOffset + 1}-${scrollOffset + SCREEN_ROWS}`
     );
   }
 }
-function nextSegment() {
-  selectedSegment = (selectedSegment + 1) % SEGMENTS;
+
+function scrollNext() {
+  if (WRAP_SCROLL) {
+    scrollOffset = (scrollOffset + 1) % TOTAL_BINS;
+  } else {
+    scrollOffset = Math.min(scrollOffset + 1, TOTAL_BINS - SCREEN_ROWS);
+  }
   displayWindow();
 }
 
-function prevSegment() {
-  selectedSegment = (selectedSegment - 1 + SEGMENTS) % SEGMENTS;
+function scrollPrev() {
+  if (WRAP_SCROLL) {
+    scrollOffset = (scrollOffset - 1 + TOTAL_BINS) % TOTAL_BINS;
+  } else {
+    scrollOffset = Math.max(scrollOffset - 1, 0);
+  }
   displayWindow();
 }
 
@@ -390,11 +397,11 @@ setInterval(() => {
 }, 500);
 
 joystick.on("down", () => {
-  nextSegment();
+  scrollNext();
 });
 
 joystick.on("up", () => {
-  prevSegment();
+  scrollPrev();
 });
 
 joystick.on("right", () => {
