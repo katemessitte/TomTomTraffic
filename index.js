@@ -66,8 +66,8 @@ function mean(arr, fn) {
 
 function congestionColor(percent) {
   if (percent < 40) return [139, 0, 0];
-  if (percent < 60) return [255, 69, 0];
-  if (percent < 99) return [255, 223, 40];
+  if (percent < 60) return [255, 140, 0];
+  if (percent < 99) return [213, 182, 10];
   return [0, 100, 0];
 }
 
