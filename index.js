@@ -5,8 +5,19 @@ const Joystick = require("sense-hat-joystick-x64");
 
 const joystick = new Joystick();
 
-const apiKey = "YZx6zQMM2oUy0dpzKvb11J19bPefrxoY";
 const HISTORY_FILE = "./data/history.csv";
+
+function loadApiKeys() {
+  const keyFile = "./.apikeys";
+  if (!fs.existsSync(keyFile)) {
+    console.log("No .apikeys file found. Live traffic disabled.");
+    return [];
+  }
+  return fs.readFileSync(keyFile, "utf8")
+    .split(/\r?\n/)
+    .map(k => k.trim())
+    .filter(k => k.length > 0);
+}
 
 const WAYPOINTS = [
   { lat: 39.9210, lon: -75.1592 },
@@ -17,12 +28,14 @@ const WAYPOINTS = [
   { lat: 40.0918, lon: -75.3963 }
 ];
 
-const TOTAL_POINTS = 320;
+const TOTAL_POINTS = 128;
 const TOTAL_BINS = 32;
-const SEGMENTS = 4;
-const BINS_PER_SEGMENT = 8;
+const SCREEN_ROWS = 8;
+const WRAP_SCROLL = false;
+const DISPLAY_TIMEZONE = "America/New_York"; // GMT-4 (EDT)
+const COLOR_MISSING = [80, 80, 80]; // dim white — shown when no data is available
 
-let selectedSegment = 0;
+let scrollOffset = 0; // which bin is at the top of the 8-row viewport
 let blinkState = true;
 
 let mode = "live"; // "live" or "history"
@@ -78,26 +91,35 @@ function buildPoints() {
   return points;
 }
 
-async function getTraffic(lat, lon) {
-  const url =
-    `https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/10/json` +
-    `?point=${lat},${lon}&key=${apiKey}`;
+async function getTraffic(lat, lon, keys) {
+  for (let i = 0; i < keys.length; i++) {
+    const url =
+      `https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/10/json` +
+      `?point=${lat},${lon}&key=${keys[i]}`;
 
-  const data = await getJson(url);
-  if (!data.flowSegmentData) return null;
+    try {
+      const data = await getJson(url);
+      if (data.flowSegmentData) {
+        if (i > 0) console.log(`Key ${i + 1} succeeded after ${i} failure(s).`);
+        const s = data.flowSegmentData;
+        return {
+          latitude: lat,
+          longitude: lon,
+          currentSpeed: s.currentSpeed,
+          freeFlowSpeed: s.freeFlowSpeed,
+          frc: s.frc
+        };
+      }
+      console.log(`Key ${i + 1} returned no data, trying next...`);
+    } catch (err) {
+      console.log(`Key ${i + 1} failed (${err.message}), trying next...`);
+    }
+  }
 
-  const s = data.flowSegmentData;
-
-  return {
-    latitude: lat,
-    longitude: lon,
-    currentSpeed: s.currentSpeed,
-    freeFlowSpeed: s.freeFlowSpeed,
-    frc: s.frc
-  };
+  return null;
 }
 
-async function fetchTrafficBatched(points, batchSize = 50) {
+async function fetchTrafficBatched(points, keys, batchSize = 50) {
   const results = [];
 
   for (let i = 0; i < points.length; i += batchSize) {
@@ -106,7 +128,7 @@ async function fetchTrafficBatched(points, batchSize = 50) {
     const batchResults = await Promise.all(
       batch.map(async p => {
         try {
-          return await getTraffic(p.lat, p.lon);
+          return await getTraffic(p.lat, p.lon, keys);
         } catch {
           return null;
         }
@@ -142,7 +164,7 @@ function buildBins(trafficData) {
     bins.push({
       congestionPercent: section.length
         ? mean(section, d => d.congestionPercent)
-        : 0
+        : null
     });
   }
 
@@ -159,7 +181,7 @@ function loadHistoryCsv() {
   if (!text) return [];
 
   const lines = text.split(/\r?\n/);
-  const headers = lines[0].split("\t");
+  const headers = lines[0].split(",");
 
   const hourIndex = headers.indexOf("hour");
   const timestampIndex = headers.indexOf("timestamp");
@@ -178,7 +200,7 @@ function loadHistoryCsv() {
   for (const line of lines.slice(1)) {
     if (!line.trim()) continue;
 
-    const cols = line.split("\t");
+    const cols = line.split(",");
 
     const time = cols[timeIndex];
     const lat = Number(cols[latIndex]);
@@ -212,7 +234,7 @@ function loadHistoryCsv() {
       bins.push({
         congestionPercent: section.length
           ? mean(section, d => d.congestionPercent)
-          : 0
+          : null
       });
     }
 
@@ -240,6 +262,24 @@ function getCurrentBins() {
   return historicalSnapshots[selectedHistoryIndex]?.bins || liveBins;
 }
 
+function formatSnapshotTime(timestamp) {
+  const date = new Date(timestamp);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    day: "numeric",
+    month: "short",
+    hour: "numeric",
+    hour12: false,
+    timeZone: DISPLAY_TIMEZONE
+  }).formatToParts(date);
+
+  const day = parts.find(p => p.type === "day").value;
+  const month = parts.find(p => p.type === "month").value.toUpperCase();
+  const hour = Number(parts.find(p => p.type === "hour").value);
+  const ampm = hour < 12 ? "AM" : "PM";
+  const hour12 = hour % 12 === 0 ? 12 : hour % 12;
+  return ` ${day} ${month} ${hour12} ${ampm} `;
+}
+
 function displayWindow() {
   const allBins = getCurrentBins();
 
@@ -249,25 +289,23 @@ function displayWindow() {
     return;
   }
 
-  const start = selectedSegment * BINS_PER_SEGMENT;
-  const visible = allBins.slice(start, start + BINS_PER_SEGMENT);
+  // The right column shows a scrollbar cursor: which row (out of 8)
+  // corresponds to the current scroll position in the full canvas.
+  const maxScroll = WRAP_SCROLL ? TOTAL_BINS : TOTAL_BINS - SCREEN_ROWS;
+  const cursorRow = Math.round(scrollOffset / maxScroll * (SCREEN_ROWS - 1));
 
   const pixels = [];
 
-  for (let row = 0; row < 8; row++) {
-    const percent = visible[row]?.congestionPercent ?? 0;
-    const color = congestionColor(percent);
-    const segmentBlock = Math.floor(row / 2);
+  for (let row = 0; row < SCREEN_ROWS; row++) {
+    const binIndex = (scrollOffset + row) % TOTAL_BINS;
+    const percent = allBins[binIndex]?.congestionPercent ?? null;
+    const color = percent === null ? COLOR_MISSING : congestionColor(percent);
 
     for (let col = 0; col < 8; col++) {
       if (col < 5) {
         pixels.push(color);
       } else {
-        if (segmentBlock === selectedSegment) {
-          pixels.push([0, 0, 80]);
-        } else {
-          pixels.push([0, 0, 0]);
-        }
+        pixels.push(row === cursorRow ? [0, 0, 80] : [0, 0, 0]);
       }
     }
   }
@@ -275,7 +313,7 @@ function displayWindow() {
   sense.setPixels(pixels);
 
   if (mode === "live") {
-    console.log(`LIVE | Segment ${selectedSegment + 1}`);
+    console.log(`LIVE | bins ${scrollOffset + 1}-${scrollOffset + SCREEN_ROWS}/${TOTAL_BINS}`);
   } else {
     if (!historicalSnapshots.length) {
       console.log("HIST mode selected, but no historical snapshots loaded.");
@@ -294,17 +332,26 @@ function displayWindow() {
     }
 
     console.log(
-      `HIST ${selectedHistoryIndex + 1}/${historicalSnapshots.length} | ${snap.timestamp} | Segment ${selectedSegment + 1}`
+      `HIST ${selectedHistoryIndex + 1}/${historicalSnapshots.length} | ${snap.timestamp} | bins ${scrollOffset + 1}-${scrollOffset + SCREEN_ROWS}`
     );
   }
 }
-function nextSegment() {
-  selectedSegment = (selectedSegment + 1) % SEGMENTS;
+
+function scrollNext() {
+  if (WRAP_SCROLL) {
+    scrollOffset = (scrollOffset + 1) % TOTAL_BINS;
+  } else {
+    scrollOffset = Math.min(scrollOffset + 1, TOTAL_BINS - SCREEN_ROWS);
+  }
   displayWindow();
 }
 
-function prevSegment() {
-  selectedSegment = (selectedSegment - 1 + SEGMENTS) % SEGMENTS;
+function scrollPrev() {
+  if (WRAP_SCROLL) {
+    scrollOffset = (scrollOffset - 1 + TOTAL_BINS) % TOTAL_BINS;
+  } else {
+    scrollOffset = Math.max(scrollOffset - 1, 0);
+  }
   displayWindow();
 }
 
@@ -322,7 +369,7 @@ function nextHistory() {
   selectedHistoryIndex =
     (selectedHistoryIndex + 1) % historicalSnapshots.length;
 
-  sense.showMessage(`T ${selectedHistoryIndex + 1}`, 0.05);
+  sense.showMessage(formatSnapshotTime(historicalSnapshots[selectedHistoryIndex].timestamp), 0.05);
   displayWindow();
 }
 
@@ -341,7 +388,7 @@ function prevHistory() {
     (selectedHistoryIndex - 1 + historicalSnapshots.length) %
     historicalSnapshots.length;
 
-  sense.showMessage(`T ${selectedHistoryIndex + 1}`, 0.05);
+  sense.showMessage(formatSnapshotTime(historicalSnapshots[selectedHistoryIndex].timestamp), 0.05);
   displayWindow();
 }
 
@@ -370,11 +417,11 @@ setInterval(() => {
 }, 500);
 
 joystick.on("down", () => {
-  nextSegment();
+  scrollNext();
 });
 
 joystick.on("up", () => {
-  prevSegment();
+  scrollPrev();
 });
 
 joystick.on("right", () => {
@@ -395,10 +442,16 @@ async function init() {
   historicalSnapshots = loadHistoryCsv();
   console.log(`Loaded ${historicalSnapshots.length} historical snapshots.`);
 
-  const points = buildPoints();
-  const traffic = await fetchTrafficBatched(points);
+  const apiKeys = loadApiKeys();
 
-  liveBins = buildBins(traffic);
+  if (!apiKeys.length) {
+    console.log("No API keys available. Skipping live fetch — showing historical data only.");
+    sense.showMessage("NO KEY", 0.05);
+  } else {
+    const points = buildPoints();
+    const traffic = await fetchTrafficBatched(points, apiKeys);
+    liveBins = buildBins(traffic);
+  }
 
   sense.showMessage("READY", 0.05);
   sense.showMessage("LIVE", 0.05);
@@ -410,10 +463,10 @@ function shutdown() {
   console.log("Shutting down...");
   joystick.end();
   sense.clear();
-  process.exit(0);
+  process.kill(process.pid, "SIGKILL");
 }
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);   // Ctrl + C
+process.on("SIGTERM", shutdown);  // kill / system stop
 
 init();
